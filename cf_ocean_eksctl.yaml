@@ -1,0 +1,196 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Amazon EKS With Spotinst Ocean Workers"
+
+Parameters:
+  DefaultVpcId:
+    Type: String
+    Description: Id of the default VPC
+
+  AccessToken:
+    Type: String
+    Description: Provide Spotinst API Token
+
+  AccountID:
+    Type: String
+    Description: Provide Spotinst Account ID
+
+  JumpHostImageId:
+    Type: String
+    Description: Image ID for the jump host
+
+  JumpHostKeyPair:
+    Type: String
+    Description: KeyPair to use when launching the Jumphost instance
+
+  JumpHostSubnetId:
+    Type: String
+    Description: SubnetID for the jump host
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "EKS Configuration"
+        Parameters:
+          - DefaultVpcId
+          - AccessToken
+          - AccountID
+          - JumpHostImageId
+          - JumpHostKeyPair
+          - JumpHostSubnetId
+
+Resources:
+  JumpHostSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG for eksctl jumphost
+      VpcId: !Ref "DefaultVpcId"
+
+  JumpHostManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EksctlIAMPermissions
+            Effect: Allow
+            Action:
+              - iam:CreateInstanceProfile
+              - iam:DeleteInstanceProfile
+              - iam:GetRole
+              - iam:GetInstanceProfile
+              - iam:RemoveRoleFromInstanceProfile
+              - iam:CreateRole
+              - iam:DeleteRole
+              - iam:AttachRolePolicy
+              - iam:PutRolePolicy
+              - iam:ListInstanceProfiles
+              - logs:PutLogEvents
+              - iam:AddRoleToInstanceProfile
+              - iam:ListInstanceProfilesForRole
+              - iam:PassRole
+              - logs:CreateLogStream
+              - iam:DetachRolePolicy
+              - iam:DeleteRolePolicy
+              - ec2:DeleteInternetGateway
+              - iam:GetRolePolicy
+            Resource:
+              - arn:aws:iam::<AWS_ACCOUNT>:instance-profile/eksctl-*
+              - arn:aws:iam::<AWS_ACCOUNT>:role/eksctl-*
+              - arn:aws:logs:us-west-2:<AWS_ACCOUNT>:log-group:/aws/lambda/bashTest:*
+              - arn:aws:ec2:*:*:internet-gateway/*
+          - Sid: OIDC
+            Effect: Allow
+            Action:
+              - iam:GetOpenIDConnectProvider
+            Resource:
+              - arn:aws:iam::<AWS_ACCOUNT>:oidc-provider/oidc.eks.us-west-2.amazonaws.com/id/*
+
+          - Sid: EC2Permissions
+            Effect: Allow
+            Action:
+              - ec2:AuthorizeSecurityGroupIngress
+              - ec2:DeleteSubnet
+              - ec2:DeleteTags
+              - ec2:CreateNatGateway
+              - autoscaling:DescribeLaunchConfigurations
+              - ec2:CreateVpc
+              - ec2:AttachInternetGateway
+              - ec2:DescribeVpcAttribute
+              - ec2:DeleteRouteTable
+              - ec2:AssociateRouteTable
+              - ec2:DescribeInternetGateways
+              - autoscaling:DescribeScalingActivities
+              - ec2:DescribeAvailabilityZones
+              - autoscaling:DescribeAutoScalingGroups
+              - ec2:CreateRoute
+              - ec2:CreateInternetGateway
+              - ec2:RevokeSecurityGroupEgress
+              - ec2:CreateSecurityGroup
+              - autoscaling:UpdateAutoScalingGroup
+              - ec2:ModifyVpcAttribute
+              - ec2:DeleteInternetGateway
+              - ec2:DescribeRouteTables
+              - ec2:ReleaseAddress
+              - ec2:AuthorizeSecurityGroupEgress
+              - ec2:DescribeTags
+              - ec2:CreateTags
+              - ec2:DeleteRoute
+              - ec2:CreateRouteTable
+              - cloudformation:*
+              - ec2:DetachInternetGateway
+              - ec2:DescribeNatGateways
+              - ec2:DisassociateRouteTable
+              - ec2:DescribeAddresses
+              - ec2:DescribeVpcs
+              - ec2:AllocateAddress
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeImages
+              - autoscaling:CreateLaunchConfiguration
+              - ec2:RevokeSecurityGroupIngress
+              - autoscaling:DeleteLaunchConfiguration
+              - ec2:DeleteSecurityGroup
+              - ec2:DeleteNatGateway
+              - autoscaling:DeleteAutoScalingGroup
+              - ec2:DeleteVpc
+              - eks:*
+              - ec2:CreateSubnet
+              - ec2:DescribeSubnets
+              - autoscaling:CreateAutoScalingGroup
+            Resource: "*"
+          - Sid: SSMForAMIQuery
+            Effect: Allow
+            Action: ssm:GetParameter
+            Resource: arn:aws:ssm:*:*:parameter/aws/service/eks/optimized-ami/1.14/amazon-linux-2/recommended/image_id
+          - Sid: InvokeSpotinstOceanCf
+            Effect: Allow
+            Action: lambda:InvokeFunction
+            Resource: arn:aws:lambda:*:*:function:spotinst-cloudformation
+
+  JumpHostIAMRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: /
+      ManagedPolicyArns:
+        - !Ref JumpHostManagedPolicy
+
+  JumpHostIAMInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: String
+      Path: "/"
+      Roles:
+        - !Ref JumpHostIAMRole
+
+  JumpHostInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      # AvailabilityZone: String
+      IamInstanceProfile: !Ref JumpHostIAMInstanceProfile
+      ImageId: !Ref JumpHostImageId
+      InstanceType: t2.micro
+      KeyName: !Ref JumpHostKeyPair
+      SecurityGroupIds:
+        - !Ref JumpHostSecurityGroup
+      SubnetId: !Ref JumpHostSubnetId
+      Tags:
+        - Key: Name
+          Value: eksctl-provisioner
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          touch poc
+  # NodeInstanceRole:
+  #   Description: The node instance role
+  #   Value: !GetAtt NodeInstanceRole.Arn
+
+# Outputs:
