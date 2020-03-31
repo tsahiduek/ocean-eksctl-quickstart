@@ -1,18 +1,18 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "Amazon EKS With Spotinst Ocean Workers"
+Description: "Amazon EKS With Spot Ocean Workers"
 
 Parameters:
   DefaultVpcId:
     Type: String
     Description: Id of the default VPC
 
-  AccessToken:
+  SpotAccountNumber:
     Type: String
-    Description: Provide Spotinst API Token
+    Description: Spot Account ID
 
-  AccountID:
+  SpotToken:
     Type: String
-    Description: Provide Spotinst Account ID
+    Description: Spot API Token
 
   JumpHostImageId:
     Type: String
@@ -26,6 +26,14 @@ Parameters:
     Type: String
     Description: SubnetID for the jump host
 
+  ClusterName:
+    Type: String
+    Description: EKS cluster name
+
+  EksMasterUserArn:
+    Type: String
+    Description: The arn of the user to add to the system::master group in EKS
+
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -33,11 +41,13 @@ Metadata:
           default: "EKS Configuration"
         Parameters:
           - DefaultVpcId
-          - AccessToken
-          - AccountID
+          - SpotAccountNumber
+          - SpotToken
           - JumpHostImageId
           - JumpHostKeyPair
           - JumpHostSubnetId
+          - ClusterName
+          - EksMasterUserArn
 
 Resources:
   JumpHostSecurityGroup:
@@ -75,16 +85,16 @@ Resources:
               - ec2:DeleteInternetGateway
               - iam:GetRolePolicy
             Resource:
-              - arn:aws:iam::<AWS_ACCOUNT>:instance-profile/eksctl-*
-              - arn:aws:iam::<AWS_ACCOUNT>:role/eksctl-*
-              - arn:aws:logs:us-west-2:<AWS_ACCOUNT>:log-group:/aws/lambda/bashTest:*
-              - arn:aws:ec2:*:*:internet-gateway/*
+              - !Sub arn:aws:iam::${AWS::AccountId}:instance-profile/eksctl-*
+              - !Sub arn:aws:iam::${AWS::AccountId}:role/eksctl-*
+              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/bashTest:*
+              - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:internet-gateway/*
           - Sid: OIDC
             Effect: Allow
             Action:
               - iam:GetOpenIDConnectProvider
             Resource:
-              - arn:aws:iam::<AWS_ACCOUNT>:oidc-provider/oidc.eks.us-west-2.amazonaws.com/id/*
+              - !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/oidc.eks.${AWS::Region}.amazonaws.com/id/*
 
           - Sid: EC2Permissions
             Effect: Allow
@@ -142,7 +152,7 @@ Resources:
             Effect: Allow
             Action: ssm:GetParameter
             Resource: arn:aws:ssm:*:*:parameter/aws/service/eks/optimized-ami/1.14/amazon-linux-2/recommended/image_id
-          - Sid: InvokeSpotinstOceanCf
+          - Sid: InvokeSpotinstOcean
             Effect: Allow
             Action: lambda:InvokeFunction
             Resource: arn:aws:lambda:*:*:function:spotinst-cloudformation
@@ -185,19 +195,31 @@ Resources:
       Tags:
         - Key: Name
           Value: eksctl-provisioner
+        - Key: weekly
+          Value: y
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash -xe
-          cat > ~/.spotinst/credentials << "EOF"
+          mkdir -p ~/.spotinst
+          cat > ~/.spotinst/credentials << EOF
           [default]
-          token   = <spotinst_token>
-          account = <spotinst_account>
+          account = ${SpotAccountNumber}
+          token   = ${SpotToken}
           EOF
 
-          REGION=us-west-2
-          CLUSTER_NAME=ocean-poc
+          mkdir -p .spotinst
+          cat > .spotinst/credentials << EOF
+          [default]
+          account = ${SpotAccountNumber}
+          token   = ${SpotToken}
+          EOF
+          export SPOTINST_ACCOUNT=${SpotAccountNumber}
+          export SPOTINST_TOKEN=${SpotToken}
 
-          yum update && yum upgrade
+          REGION=${AWS::Region}
+          CLUSTER_NAME=${ClusterName}
+
+          yum -y update && yum -y upgrade
 
           cat <<EOF > /etc/yum.repos.d/kubernetes.repo
           [kubernetes]
@@ -224,3 +246,4 @@ Resources:
           --spot-ocean
 
           aws eks update-kubeconfig --name $CLUSTER_NAME --region $REGION
+          eksctl create iamidentitymapping --cluster $CLUSTER_NAME --group system:masters --arn ${EksMasterUserArn}

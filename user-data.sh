@@ -1,14 +1,13 @@
-
-cat > ~/.spotinst/credentials << "EOF"
+#!/bin/bash -xe
+mkdir -p ~/.spotinst
+cat > ~/.spotinst/credentials << EOF
 [default]
-token   = <spotinst_token>
-account = <spotinst_account>
+account = ${SpotAccountNumber}
+token   = ${SpotToken}
 EOF
 
-REGION=us-west-2
-CLUSTER_NAME=ocean-poc
-
-yum update && yum upgrade
+REGION=${AWS::Region}
+CLUSTER_NAME=${ClusterName}
 
 cat <<EOF > /etc/yum.repos.d/kubernetes.repo
 [kubernetes]
@@ -35,4 +34,3 @@ eksctl create cluster \
 --spot-ocean
 
 aws eks update-kubeconfig --name $CLUSTER_NAME --region $REGION
-
